@@ -35,6 +35,13 @@ button:disabled{opacity:.45}
 .tag{position:absolute;top:8px;background:var(--ink);color:#ffd84d;font-size:11px;font-weight:800;padding:3px 8px;border-radius:99px;line-height:1.2}
 .meta{font-size:13px;font-weight:700;text-align:center}
 #msg{text-align:center;font-size:13px;font-weight:700;min-height:18px}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 8px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;background:#fff;color:var(--ink);border:2px solid var(--ink);border-radius:99px;padding:8px 13px;font-size:13px}
+.chip.on{background:var(--ink);color:#ffd84d}
+.pvbox{position:relative;border-radius:14px;overflow:hidden;background:repeating-conic-gradient(#fff 0 25%,#f3e7b0 0 50%) 0 0/16px 16px;line-height:0;touch-action:none;-webkit-user-select:none;user-select:none}
+.pvbox canvas{width:100%;height:auto;display:block}
+.hint{font-size:12px;font-weight:700;text-align:center;opacity:.8}
 .hide{display:none!important}
 </style>
 </head>
@@ -45,13 +52,14 @@ button:disabled{opacity:.45}
   <div class="card">
     <label class="drop"><span style="font-size:34px">🖼️</span>Choose a picture<small id="fn">JPG, PNG, WebP or HEIC photo</small>
       <input id="file" type="file" accept="image/*"></label>
+    <div class="pvbox hide" id="pvbox"><canvas id="pv"></canvas><span class="tag" style="left:8px" id="pvtag">Live preview</span></div>
+    <div class="hint hide" id="hint">Hold the picture to see the original</div>
+    <div class="chips" id="chips"></div>
+    <div id="sliders" style="display:grid;gap:10px"></div>
     <div class="two">
       <label>Make it<select id="tgt"><option value="s2">2× bigger</option><option value="s3">3× bigger</option><option value="s4">4× bigger</option><option value="p1280">HD (1280 px)</option><option value="p1920" selected>Full HD (1920 px)</option><option value="p2560">2K (2560 px)</option><option value="p3840">4K (3840 px)</option></select></label>
       <label>Save as<select id="fmt"><option value="jpg">JPG (smaller)</option><option value="png">PNG (lossless)</option></select></label>
     </div>
-    <div class="row"><span>Sharpness</span><output id="o1">60</output><input id="sh" type="range" min="0" max="100" value="60"></div>
-    <div class="row"><span>Contrast</span><output id="o2">10</output><input id="ct" type="range" min="0" max="50" value="10"></div>
-    <div class="row"><span>Color boost</span><output id="o3">10</output><input id="sa" type="range" min="0" max="60" value="10"></div>
     <button id="go" disabled>✨ Make it HD</button>
     <div class="bar hide" id="bar"><i id="fill"></i></div>
   </div>
@@ -68,9 +76,41 @@ const $=id=>document.getElementById(id),MAXPIX=12e6;
 let file=null,srcUrl="",outBlob=null,outUrl="",outCv=null,dl=null,ext="jpg";
 (async()=>{try{if(window.claude&&claude.use)dl=await claude.use("downloads")}catch(e){}})();
 const say=t=>{$("msg").textContent=t},sleep=ms=>new Promise(r=>setTimeout(r,ms)),prog=x=>{$("fill").style.width=x*100+"%"};
-[["sh","o1"],["ct","o2"],["sa","o3"]].forEach(([a,b])=>{$(a).oninput=()=>{$(b).textContent=$(a).value}});
 $("sl").oninput=()=>$("cmp").style.setProperty("--p",$("sl").value+"%");
-$("file").onchange=e=>{file=e.target.files[0];if(!file)return;$("fn").textContent=file.name;$("go").disabled=false;$("out").classList.add("hide");say("")};
+const Z={sh:0,ct:0,sa:0,br:0,wm:0,vg:0,gr:0,sp:0,fd:0};
+const LOOKS=[["Auto HD","✨",{sh:80,ct:15,sa:15,br:3}],["Original","🖼️",{}],["Vivid","🌈",{sh:70,ct:25,sa:45,br:5}],["Warm","☀️",{sh:60,ct:10,sa:15,wm:30,br:3}],["Cool","❄️",{sh:60,ct:10,sa:10,wm:-30}],["B&W","⚫",{sh:70,ct:25,gr:1}],["Noir","🎩",{sh:80,ct:45,gr:1,vg:55,br:-5}],["Vintage","📷",{sh:30,ct:-5,sa:-10,sp:.55,fd:.5,vg:35,wm:15}],["Cinematic","🎬",{sh:70,ct:35,sa:-5,wm:-12,vg:45,fd:.15,br:-4}],["Dramatic","⚡",{sh:100,ct:50,sa:20,br:-6,vg:40}],["Sunset","🌇",{sh:60,ct:15,sa:35,wm:42,br:4,vg:20}],["Soft Fade","🌸",{sh:20,ct:-12,sa:5,br:8,fd:.25}]];
+const SL=[["sh","Sharpness",0,100],["ct","Contrast",-30,50],["sa","Color",-100,60],["br","Brightness",-50,50],["wm","Warmth",-50,50],["vg","Vignette",0,100]];
+let P={...Z},pvBase=null,tm;
+SL.forEach(([k,l,mn,mx])=>{const r=document.createElement("div");r.className="row";r.innerHTML=`<span>${l}</span><output id="o_${k}">0</output><input id="r_${k}" type="range" min="${mn}" max="${mx}" value="0">`;$("sliders").appendChild(r);
+  $("r_"+k).oninput=e=>{P[k]=+e.target.value;$("o_"+k).textContent=P[k];document.querySelectorAll(".chip").forEach(c=>c.classList.remove("on"));upd()}});
+function setLook(i){P={...Z,...LOOKS[i][2]};SL.forEach(([k])=>{$("r_"+k).value=P[k];$("o_"+k).textContent=P[k]});
+  document.querySelectorAll(".chip").forEach((c,j)=>c.classList.toggle("on",j===i));upd()}
+LOOKS.forEach((l,i)=>{const b=document.createElement("button");b.className="chip";b.textContent=l[1]+" "+l[0];b.onclick=()=>setLook(i);$("chips").appendChild(b)});
+function look(c,p,r){
+  const W=c.width,H=c.height,x=c.getContext("2d",{willReadFrequently:true}),id=x.getImageData(0,0,W,H),d=id.data,N=W*H,amt=p.sh/100*1.3,B=[];
+  if(amt>0){const tmp=new Uint8Array(N);for(let q=0;q<3;q++){const o=new Uint8Array(N);blurH(d,q,W,H,r,tmp);blurV(tmp,o,W,H,r);B.push(o)}}
+  const k=1+p.ct/150,sat=1+p.sa/100,br=p.br*1.5,wm=p.wm*.9,vg=p.vg/100,gr=p.gr,sp=p.sp,fd=p.fd,cx=W/2,cy=H/2,md=Math.hypot(cx,cy);
+  for(let y=0;y<H;y++){const dy=(y-cy)*(y-cy);for(let xx=0;xx<W;xx++){const j=y*W+xx,i=j*4;let R=d[i],G=d[i+1],Bb=d[i+2];
+    if(amt>0){R+=amt*(R-B[0][j]);G+=amt*(G-B[1][j]);Bb+=amt*(Bb-B[2][j])}
+    R+=br;G+=br;Bb+=br;
+    if(k!==1){R=(R-128)*k+128;G=(G-128)*k+128;Bb=(Bb-128)*k+128}
+    if(sat!==1){const l=.299*R+.587*G+.114*Bb;R=l+(R-l)*sat;G=l+(G-l)*sat;Bb=l+(Bb-l)*sat}
+    if(wm){R+=wm;Bb-=wm;G+=wm*.2}
+    if(gr){const l=.299*R+.587*G+.114*Bb;R+=(l-R)*gr;G+=(l-G)*gr;Bb+=(l-Bb)*gr}
+    if(sp){const a=.393*R+.769*G+.189*Bb,b=.349*R+.686*G+.168*Bb,c2=.272*R+.534*G+.131*Bb;R+=(a-R)*sp;G+=(b-G)*sp;Bb+=(c2-Bb)*sp}
+    if(fd){R=R*(1-fd*.25)+fd*45;G=G*(1-fd*.25)+fd*45;Bb=Bb*(1-fd*.25)+fd*45}
+    if(vg){const dd=Math.sqrt(dy+(xx-cx)*(xx-cx))/md,f=1-vg*dd*dd*1.1;R*=f;G*=f;Bb*=f}
+    d[i]=R;d[i+1]=G;d[i+2]=Bb}}
+  x.putImageData(id,0,0)}
+function preview(){if(!pvBase)return;const c=$("pv");c.width=pvBase.width;c.height=pvBase.height;c.getContext("2d").drawImage(pvBase,0,0);look(c,P,1);$("pvtag").textContent="Live preview"}
+function upd(){clearTimeout(tm);tm=setTimeout(preview,40)}
+function showOrig(){if(!pvBase)return;const c=$("pv");c.getContext("2d").drawImage(pvBase,0,0);$("pvtag").textContent="Original"}
+const pb=$("pvbox");pb.onpointerdown=showOrig;["pointerup","pointerleave","pointercancel"].forEach(ev=>pb.addEventListener(ev,preview));
+$("file").onchange=async e=>{file=e.target.files[0];if(!file)return;$("fn").textContent=file.name;$("go").disabled=true;$("out").classList.add("hide");say("Loading...");
+  try{const im=await load(file),[w,h]=dim(im),f=Math.min(1,600/Math.max(w,h));pvBase=cv(Math.round(w*f),Math.round(h*f));const x=pvBase.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(im,0,0,pvBase.width,pvBase.height);
+    $("pvbox").classList.remove("hide");$("hint").classList.remove("hide");preview();$("go").disabled=false;say("")}
+  catch(err){say("Could not open that picture.")}};
+setLook(0);
 function load(f){return createImageBitmap(f,{imageOrientation:"from-image"}).catch(()=>new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=URL.createObjectURL(f)}))}
 const dim=i=>[i.width||i.naturalWidth,i.height||i.naturalHeight];
 function cv(w,h){const c=document.createElement("canvas");c.width=w;c.height=h;return c}
@@ -91,17 +131,8 @@ $("go").onclick=async()=>{
     let cur=im,cw=sw,ch=sh;
     while(cw*2<tw){const c=cv(cw*2,ch*2),x=c.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(cur,0,0,cw*2,ch*2);cur=c;cw*=2;ch*=2;await sleep(0)}
     const c=cv(tw,th),x=c.getContext("2d",{willReadFrequently:true});x.imageSmoothingQuality="high";x.drawImage(cur,0,0,tw,th);prog(.3);
-    const amt=$("sh").value/100*1.3,k=1+$("ct").value/200,sat=1+$("sa").value/100;
-    if(amt>0||k!==1||sat!==1){
-      say("Sharpening...");await sleep(20);
-      const id=x.getImageData(0,0,tw,th),d=id.data,N=tw*th,r=Math.max(1,Math.min(4,Math.round(s*.9))),tmp=new Uint8Array(N),B=[];
-      if(amt>0)for(let ch2=0;ch2<3;ch2++){const o=new Uint8Array(N);blurH(d,ch2,tw,th,r,tmp);blurV(tmp,o,tw,th,r);B.push(o);prog(.3+.15*(ch2+1));await sleep(0)}
-      for(let i=0,j=0;j<N;i+=4,j++){let R=d[i],G=d[i+1],Bb=d[i+2];
-        if(amt>0){R+=amt*(R-B[0][j]);G+=amt*(G-B[1][j]);Bb+=amt*(Bb-B[2][j])}
-        if(sat!==1){const l=.299*R+.587*G+.114*Bb;R=l+(R-l)*sat;G=l+(G-l)*sat;Bb=l+(Bb-l)*sat}
-        if(k!==1){R=(R-128)*k+128;G=(G-128)*k+128;Bb=(Bb-128)*k+128}
-        d[i]=R;d[i+1]=G;d[i+2]=Bb}
-      x.putImageData(id,0,0)}
+    say("Applying the look...");await sleep(20);
+    look(c,P,Math.max(1,Math.min(4,Math.round(s*.9))));prog(.8);
     prog(.85);say("Saving...");await sleep(20);
     ext=$("fmt").value;outCv=c;
     outBlob=await new Promise(r=>c.toBlob(r,ext==="png"?"image/png":"image/jpeg",.95));
