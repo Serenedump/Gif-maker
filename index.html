@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GIF Generator</title>
+<style>
+:root{--ink:#3b2700;--gold:#f2b100;--card:rgba(255,255,255,.7);color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--ink:#3b2700;--gold:#f2b100;--card:rgba(255,255,255,.7);color-scheme:light}}
+:root[data-theme="dark"]{--ink:#3b2700;--card:rgba(255,255,255,.7)}
+*{box-sizing:border-box;margin:0}
+body{min-height:100%;font-family:-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:#ffd23f;background:radial-gradient(circle at 15% 5%,#fff3a8,transparent 45%),linear-gradient(165deg,#ffe45e,#ffc72c 60%,#ffae00);background-attachment:fixed}
+.wrap{max-width:520px;margin:0 auto;padding:22px 16px 40px;display:grid;gap:14px}
+h1{font-family:Georgia,serif;font-size:30px;text-align:center;text-shadow:0 2px 0 rgba(255,255,255,.6)}
+.sub{text-align:center;font-weight:600;color:#6b4a00;font-size:14px;margin-top:-8px}
+.card{background:var(--card);border:1.5px solid #fff;border-radius:20px;padding:14px;box-shadow:0 10px 26px rgba(150,90,0,.22);display:grid;gap:12px}
+.drop{display:grid;place-items:center;gap:4px;text-align:center;border:2.5px dashed var(--ink);border-radius:16px;padding:22px 10px;font-weight:700;cursor:pointer;background:rgba(255,255,255,.5)}
+.drop small{font-weight:500;opacity:.75}
+.drop input{display:none}
+.row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;font-size:14px;font-weight:600}
+.row output{background:var(--ink);color:#ffd84d;border-radius:99px;padding:2px 10px;font-size:12px}
+input[type=range]{width:100%;accent-color:var(--ink);grid-column:1/-1}
+select,input[type=number]{font:inherit;padding:7px 9px;border-radius:10px;border:1.5px solid var(--ink);background:#fff;color:var(--ink);width:100%}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;font-weight:600}
+button{font:inherit;font-weight:800;border:0;border-radius:14px;padding:13px;background:var(--ink);color:#ffd84d;cursor:pointer}
+button:disabled{opacity:.45}
+.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.btns button{background:#fff;color:var(--ink);border:2px solid var(--ink);padding:11px 4px;font-size:14px}
+.bar{height:10px;border-radius:9px;background:rgba(255,255,255,.7);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--ink);transition:width .15s}
+#out img{width:100%;border-radius:14px;display:block;background:repeating-conic-gradient(#fff 0 25%,#f3e7b0 0 50%) 0 0/16px 16px}
+.meta{font-size:13px;font-weight:700;text-align:center}
+#msg{text-align:center;font-size:13px;font-weight:700;min-height:18px}
+.hide{display:none!important}
+video{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GIF Generator</h1>
+  <div class="sub">Turn a video or pictures into a GIF, then save, download, or copy it</div>
+  <div class="card">
+    <label class="drop"><span style="font-size:34px">🎞️</span>Choose a video or pictures<small id="fn">One video, or several pictures for a slideshow</small>
+      <input id="file" type="file" accept="video/*,image/*" multiple></label>
+    <div class="two">
+      <label>Width<select id="w"><option>240</option><option>360</option><option selected>480</option><option>640</option></select></label>
+      <label id="fpsBox">FPS<select id="fps"><option>6</option><option>10</option><option selected>12</option><option>15</option></select></label>
+    </div>
+    <div class="two" id="vidOpts">
+      <label>Start (sec)<input id="t0" type="number" min="0" step="0.1" value="0"></label>
+      <label>End (sec)<input id="t1" type="number" min="0" step="0.1" value="5"></label>
+    </div>
+    <div class="row hide" id="dlyBox"><span>Time per picture</span><output id="dlyO">0.8s</output><input id="dly" type="range" min="2" max="300" value="80"></div>
+    <button id="go" disabled>✨ Make the GIF</button>
+    <div class="bar hide" id="bar"><i id="fill"></i></div>
+  </div>
+  <div class="card hide" id="out">
+    <img id="prev" alt="GIF preview">
+    <div class="meta" id="meta"></div>
+    <div class="btns"><button id="bSave">💾 Save</button><button id="bDl">⬇️ Download</button><button id="bCopy">📋 Copy</button></div>
+  </div>
+  <div id="msg"></div>
+</div>
+<video id="vid" muted playsinline preload="auto"></video>
+<script>
+const $=id=>document.getElementById(id);
+let files=[],mode="",blob=null,url="",dl=null;
+(async()=>{try{if(window.claude&&claude.use)dl=await claude.use("downloads")}catch(e){}})();
+const say=t=>{$("msg").textContent=t};
+$("dly").oninput=()=>{$("dlyO").textContent=($("dly").value/100).toFixed(1)+"s"};
+$("file").onchange=async e=>{
+  files=[...e.target.files];if(!files.length)return;blob=null;$("out").classList.add("hide");
+  const isVid=files[0].type.startsWith("video/")||/\.(mov|mp4|m4v|webm)$/i.test(files[0].name);
+  mode=isVid?"video":"images";
+  $("fn").textContent=isVid?files[0].name:files.length+(files.length===1?" picture":" pictures");
+  $("vidOpts").classList.toggle("hide",!isVid);$("fpsBox").classList.toggle("hide",!isVid);$("dlyBox").classList.toggle("hide",isVid);
+  if(isVid){const v=$("vid");v.src=URL.createObjectURL(files[0]);
+    try{await new Promise((ok,no)=>{v.onloadedmetadata=ok;v.onerror=no});$("t1").value=Math.min(v.duration,5).toFixed(1);$("t1").max=v.duration.toFixed(1);say("Ready. Video length: "+v.duration.toFixed(1)+"s")}
+    catch(err){say("This browser can't read that video. Try Safari or Chrome.");return}}
+  else say("");
+  $("go").disabled=false;
+};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const seek=(v,t)=>new Promise(r=>{v.onseeked=()=>r();v.currentTime=t});
+const loadImg=f=>new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=URL.createObjectURL(f)});
+function lzw(px){
+  const buf=[];let cur=0,nb=0;
+  const emit=(c,s)=>{cur|=c<<nb;nb+=s;while(nb>=8){buf.push(cur&255);cur>>=8;nb-=8}};
+  let size=9,next=258,dict=new Map();emit(256,size);let p=px[0];
+  for(let i=1;i<px.length;i++){const k=px[i],key=(p<<8)|k,v=dict.get(key);
+    if(v!==undefined){p=v;continue}
+    emit(p,size);if(next>=(1<<size)&&size<12)size++;
+    if(next<4096){dict.set(key,next++)}else{emit(256,size);dict.clear();next=258;size=9}
+    p=k}
+  emit(p,size);if(next>=(1<<size)&&size<12)size++;emit(257,size);if(nb>0)buf.push(cur&255);
+  return buf}
+function encode(frames,w,h,delays){
+  const cnt=new Uint32Array(4096);
+  for(const f of frames){const d=f.data;for(let i=0;i<d.length;i+=16)cnt[((d[i]>>4)<<8)|((d[i+1]>>4)<<4)|(d[i+2]>>4)]++}
+  const bins=[];for(let b=0;b<4096;b++)if(cnt[b])bins.push(b);
+  bins.sort((a,b)=>cnt[b]-cnt[a]);const pal=bins.slice(0,255);
+  const col=b=>[((b>>8)&15)*17,((b>>4)&15)*17,(b&15)*17];
+  const map=new Uint8Array(4096);
+  for(let b=0;b<4096;b++){const c=col(b);let best=0,bd=1e9;
+    for(let j=0;j<pal.length;j++){const q=col(pal[j]),d=(c[0]-q[0])**2+(c[1]-q[1])**2+(c[2]-q[2])**2;if(d<bd){bd=d;best=j}}map[b]=best}
+  const out=[],push=a=>{for(const x of a)out.push(x)},le=n=>[n&255,n>>8];
+  push([71,73,70,56,57,97]);push(le(w));push(le(h));push([0xF7,0,0]);
+  for(let j=0;j<256;j++)push(j<pal.length?col(pal[j]):[0,0,0]);
+  push([0x21,0xFF,0x0B,...[..."NETSCAPE2.0"].map(c=>c.charCodeAt(0)),3,1,0,0,0]);
+  frames.forEach((f,fi)=>{
+    const d=f.data,px=new Uint8Array(w*h);
+    for(let i=0,j=0;j<px.length;i+=4,j++)px[j]=map[((d[i]>>4)<<8)|((d[i+1]>>4)<<4)|(d[i+2]>>4)];
+    push([0x21,0xF9,4,4]);push(le(delays[fi]));push([0,0]);
+    push([0x2C,0,0,0,0]);push(le(w));push(le(h));push([0,8]);
+    const data=lzw(px);for(let i=0;i<data.length;i+=255){const ch=data.slice(i,i+255);out.push(ch.length);push(ch)}
+    out.push(0)});
+  out.push(0x3B);return new Blob([new Uint8Array(out)],{type:"image/gif"})}
+$("go").onclick=async()=>{
+  $("go").disabled=true;$("bar").classList.remove("hide");$("out").classList.add("hide");say("Working...");
+  const W=+$("w").value,prog=x=>{$("fill").style.width=(x*100)+"%"};
+  try{
+    const cv=document.createElement("canvas"),frames=[],delays=[];let ctx,H;
+    if(mode==="video"){
+      const v=$("vid"),fps=+$("fps").value;let a=Math.max(0,+$("t0").value),b=Math.min(v.duration,+$("t1").value);
+      if(b<=a)throw new Error("'End' must be later than 'Start'.");
+      H=Math.round(W*v.videoHeight/v.videoWidth);cv.width=W;cv.height=H;ctx=cv.getContext("2d",{willReadFrequently:true});
+      const n=Math.min(150,Math.max(1,Math.floor((b-a)*fps)));
+      for(let i=0;i<n;i++){await seek(v,Math.min(b,a+i/fps));ctx.drawImage(v,0,0,W,H);frames.push(ctx.getImageData(0,0,W,H));delays.push(Math.round(100/fps));prog(i/n*.7)}
+    }else{
+      const imgs=[];for(const f of files)imgs.push(await loadImg(f));
+      H=Math.round(W*imgs[0].naturalHeight/imgs[0].naturalWidth);cv.width=W;cv.height=H;ctx=cv.getContext("2d",{willReadFrequently:true});
+      imgs.forEach((im,i)=>{ctx.fillStyle="#fff";ctx.fillRect(0,0,W,H);const s=Math.min(W/im.naturalWidth,H/im.naturalHeight),dw=im.naturalWidth*s,dh=im.naturalHeight*s;
+        ctx.drawImage(im,(W-dw)/2,(H-dh)/2,dw,dh);frames.push(ctx.getImageData(0,0,W,H));delays.push(+$("dly").value)});prog(.7)}
+    await sleep(30);say("Encoding the GIF...");await sleep(30);
+    blob=encode(frames,W,H,delays);prog(1);
+    if(url)URL.revokeObjectURL(url);url=URL.createObjectURL(blob);
+    $("prev").src=url;$("meta").textContent=frames.length+" frames • "+W+"×"+H+" • "+(blob.size/1024).toFixed(0)+" KB";
+    $("out").classList.remove("hide");say("Done! ✅");$("out").scrollIntoView({behavior:"smooth"});
+  }catch(err){say("Something went wrong: "+(err.message||err))}
+  $("go").disabled=false;setTimeout(()=>$("bar").classList.add("hide"),600);
+};
+const name=()=>"my-gif-"+Date.now()+".gif";
+async function download(){
+  if(dl){try{await dl.save({filename:name(),data:blob});say("Saved! ✅");return true}catch(e){if(e&&e.code==="declined"){say("Download cancelled.");return true}}}
+  try{const a=document.createElement("a");a.href=url;a.download=name();document.body.appendChild(a);a.click();a.remove();say("Download attempted. If nothing appeared, use Save or long-press the GIF.");return true}catch(e){return false}}
+$("bDl").onclick=()=>blob&&download();
+$("bSave").onclick=async()=>{
+  if(!blob)return;const f=new File([blob],name(),{type:"image/gif"});
+  try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f]});say("Shared/saved! ✅");return}}catch(e){if(e&&e.name==="AbortError")return}
+  await download()};
+$("bCopy").onclick=async()=>{
+  if(!blob)return;
+  try{await navigator.clipboard.write([new ClipboardItem({"image/gif":blob})]);say("GIF copied! 📋");return}catch(e){}
+  try{const im=await loadImg(blob),c=document.createElement("canvas");c.width=im.naturalWidth;c.height=im.naturalHeight;c.getContext("2d").drawImage(im,0,0);
+    const png=await new Promise(r=>c.toBlob(r,"image/png"));
+    await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);say("Copied as a still picture only; this browser can't copy GIFs. Use Save or Download to keep it animated.")}
+  catch(e){say("The browser blocked copying. Use Save or Download, or long-press the GIF.")}};
+</script>
+</body>
+</html>
